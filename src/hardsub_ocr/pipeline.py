@@ -17,7 +17,9 @@ from hardsub_ocr.models import OcrCandidate, OcrEvent, Progress, SubtitleSegment
 from hardsub_ocr.ocr.base import OcrEngine
 from hardsub_ocr.ocr.rapidocr_engine import RapidOcrEngine
 from hardsub_ocr.subtitle.segment_builder import SegmentBuilder
-from hardsub_ocr.subtitle.candidate_selector import CandidateSelection, select_candidate
+from hardsub_ocr.subtitle.candidate_selector import (
+    CandidateSelection, resolve_with_single_candidate_fallback, select_candidate,
+)
 from hardsub_ocr.subtitle.srt_writer import write_srt
 from hardsub_ocr.subtitle.text_normalizer import merge_ocr_lines, normalize_text
 from hardsub_ocr.utils.file_utils import atomic_write_json, output_paths, safe_filename
@@ -40,6 +42,11 @@ class OcrPipeline:
         self.segments: list[SubtitleSegment] = []
         self.progress = Progress(total_duration=config.end_time - config.start_time)
         self._started_iso = ""
+        self.auxiliary_ffmpeg_runs = 0
+        self.auxiliary_decode_ms = 0.0
+        self.fallback_used = 0
+        self.transition_debounce_skips = 0
+        self._last_aux_transition_at: float | None = None
 
     def cancel(self) -> None:
         self.cancel_event.set()
@@ -80,19 +87,26 @@ class OcrPipeline:
                         event.transition_start = timestamp
                         previous_text = builder.current.text if builder.current else (
                             builder.segments[-1].text if builder.segments else "")
+                        runs_before = self.auxiliary_ffmpeg_runs
+                        decode_before = self.auxiliary_decode_ms
+                        skips_before = self.transition_debounce_skips
                         candidates = self._collect_candidates(timestamp, frame)
                         selection = self._select(candidates, previous_text)
                         self._record_selection(event, candidates, selection)
+                        event.auxiliary_ffmpeg_runs = self.auxiliary_ffmpeg_runs - runs_before
+                        event.auxiliary_decode_ms = self.auxiliary_decode_ms - decode_before
+                        event.transition_debounce_skips = self.transition_debounce_skips - skips_before
                         event.processing_time_ms = sum(candidate.processing_time_ms for candidate in candidates)
-                        if selection.selected is None:
+                        chosen, fallback = resolve_with_single_candidate_fallback(selection)
+                        event.fallback_used = fallback
+                        if fallback:
+                            self.fallback_used += 1
+                        if chosen is None:
                             empty_candidates = candidates or [OcrCandidate(timestamp, "", "", 0.0, self.config.preprocess_mode)]
                             for candidate in empty_candidates:
                                 event.segment_action, event.previous_similarity_score = builder.add(
                                     candidate.timestamp, "", 0.0, frame_index)
-                        elif not selection.confirmed:
-                            event.segment_action = "hold_unconfirmed"
                         else:
-                            chosen = selection.selected
                             event.detected_text = chosen.text
                             event.normalized_text = chosen.normalized_text
                             event.confidence = chosen.confidence
@@ -134,37 +148,49 @@ class OcrPipeline:
                 self.aux_reader.stop()
 
     def _collect_candidates(self, transition_timestamp: float, fallback_frame) -> list[OcrCandidate]:
-        read_count = self.config.candidate_frame_count
-        recognition_count = read_count
+        target_count = self.config.candidate_frame_count
         if self.config.processing_mode == "fast":
-            recognition_count = min(2, read_count)
+            target_count = min(2, target_count)
+        candidates = [self._recognize_frame(transition_timestamp, fallback_frame, 0, initial_transition=True)]
+        if target_count <= 1 or self.cancel_event.is_set():
+            return candidates
+        if (self._last_aux_transition_at is not None
+                and transition_timestamp - self._last_aux_transition_at < self.config.candidate_window_seconds):
+            self.transition_debounce_skips += 1
+            return candidates
+        self._last_aux_transition_at = transition_timestamp
         start = transition_timestamp + self.config.transition_settle_seconds
         end = min(self.config.end_time, start + self.config.candidate_window_seconds)
         frames: list[tuple[float, object]] = []
         if end > start + 0.01:
-            auxiliary_interval = min(0.2, max(0.1, self.config.candidate_window_seconds / max(read_count, 1)))
+            auxiliary_interval = min(0.2, max(0.1, self.config.candidate_window_seconds / 3))
             self.aux_reader = FFmpegFrameReader(self.config.input_path, start, end, self.config.crop,
                                                 auxiliary_interval, self.config.ffmpeg_threads)
+            decode_started = time.perf_counter()
+            self.auxiliary_ffmpeg_runs += 1
             for _, timestamp, frame in self.aux_reader.frames():
                 if self.cancel_event.is_set():
                     break
                 frames.append((timestamp, frame))
-                if len(frames) >= read_count:
+                if len(frames) >= 3:
                     # Continue consuming the very small window so FFmpeg exits cleanly,
                     # but do not retain or OCR additional frames.
                     continue
-            frames = frames[:read_count]
+            self.auxiliary_decode_ms += (time.perf_counter() - decode_started) * 1000
+            frames = frames[:3]
             self.aux_reader = None
-        if not frames and not self.cancel_event.is_set():
-            frames = [(transition_timestamp, fallback_frame)]
-        candidates = [self._recognize_frame(timestamp, frame, index)
-                      for index, (timestamp, frame) in enumerate(frames[:recognition_count])]
+        auxiliary_needed = max(0, target_count - 1)
+        candidates.extend(self._recognize_frame(timestamp, frame, index + 1)
+                          for index, (timestamp, frame) in enumerate(frames[:auxiliary_needed]))
         if candidates and all(not candidate.normalized_text for candidate in candidates):
-            for index, (timestamp, frame) in enumerate(frames[recognition_count:], recognition_count):
+            for index, (timestamp, frame) in enumerate(frames[auxiliary_needed:], auxiliary_needed + 1):
                 candidates.append(self._recognize_frame(timestamp, frame, index))
+                if timestamp - transition_timestamp + 1e-9 >= self.config.empty_confirmation_seconds:
+                    break
         return candidates
 
-    def _recognize_frame(self, timestamp: float, frame, candidate_index: int) -> OcrCandidate:
+    def _recognize_frame(self, timestamp: float, frame, candidate_index: int,
+                         initial_transition: bool = False) -> OcrCandidate:
         modes = [self.config.preprocess_mode]
         if self.config.processing_mode == "precise":
             modes = ["original", "gray2x"]
@@ -184,6 +210,7 @@ class OcrPipeline:
             before, after, overlaps = result.text, result.text, []
         normalized = normalize_text(after, deduplicate_lines=False)
         candidate = OcrCandidate(timestamp, after, normalized, result.confidence, mode, result.processing_time_ms,
+                                 initial_transition,
                                  raw_lines=raw_lines, joined_text_before_dedup=before,
                                  joined_text_after_dedup=after, deduplicated_overlap=overlaps)
         if self.config.save_debug_images:
@@ -245,6 +272,10 @@ class OcrPipeline:
                 "empty_confirmation_count": self.config.empty_confirmation_count,
                 "empty_confirmation_seconds": self.config.empty_confirmation_seconds,
                 "processing_mode": self.config.processing_mode,
+                "auxiliary_ffmpeg_runs": self.auxiliary_ffmpeg_runs,
+                "auxiliary_decode_ms": self.auxiliary_decode_ms,
+                "fallback_used": self.fallback_used,
+                "transition_debounce_skips": self.transition_debounce_skips,
                 "ocr_engine": getattr(self.engine, "name", type(self.engine).__name__),
                 "run_started_at": self._started_iso,
                 "run_finished_at": datetime.now(timezone.utc).isoformat() if finished else None,

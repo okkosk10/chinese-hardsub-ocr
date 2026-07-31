@@ -19,6 +19,7 @@ class CandidateWeights:
     length_stability: float = 10.0
     transition_mix_penalty: float = 35.0
     singleton_penalty: float = 8.0
+    initial_transition_penalty: float = 12.0
 
 
 @dataclass(slots=True)
@@ -91,6 +92,7 @@ def select_candidate(candidates: list[OcrCandidate], previous_text: str = "", co
             + length_stability * weights.length_stability
             - (weights.transition_mix_penalty if mixed else 0)
             - (weights.singleton_penalty if len(nonempty) > 1 and agreeing == 0 else 0)
+            - (weights.initial_transition_penalty if candidate.initial_transition_frame and len(nonempty) > 1 else 0)
         )
 
     ranked = sorted(nonempty, key=lambda item: (item.candidate_score, item.confidence), reverse=True)
@@ -150,22 +152,14 @@ def select_candidate(candidates: list[OcrCandidate], previous_text: str = "", co
                 removed_suffix = outlier.normalized_text[len(prefix):]
                 reason = "candidate_consensus_removed_unstable_suffix"
 
-        # Fast mode may provide only two observations. If they differ solely by
-        # a very short suffix and confidence is comparable, prefer the observed
-        # common sentence instead of trusting the unique extension.
-        if not removed_suffix and len(nonempty) == 2:
-            ordered = sorted(nonempty, key=lambda item: item.character_count)
-            short, long = ordered[0], ordered[1]
-            short_key, long_key = comparison_key(short.normalized_text), comparison_key(long.normalized_text)
-            if (long_key.startswith(short_key)
-                    and 0 < len(long_key) - len(short_key) <= unstable_suffix_max_chars
-                    and short.confidence + 0.12 >= long.confidence):
-                prefix = _common_prefix(long.normalized_text, short.normalized_text)
-                removed_suffix = long.normalized_text[len(prefix):]
-                selected, agreeing = short, [short]
-                reason = "removed_two_frame_unstable_suffix"
-
     consensus = sum(similarity(selected.normalized_text, item.normalized_text) for item in agreeing) / len(agreeing)
     confirmed = len(agreeing) >= 2 or selected.confidence >= 0.75
     rejected = [candidate for candidate in candidates if candidate is not selected]
     return CandidateSelection(selected, rejected, reason, consensus, removed_suffix, confirmed)
+
+
+def resolve_with_single_candidate_fallback(selection: CandidateSelection) -> tuple[OcrCandidate | None, bool]:
+    """Never discard the sole observation; mark it as a lower-confidence fallback."""
+    if selection.selected is None:
+        return None, False
+    return selection.selected, not selection.confirmed

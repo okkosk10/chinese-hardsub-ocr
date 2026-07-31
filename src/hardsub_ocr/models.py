@@ -35,6 +35,7 @@ class OcrCandidate:
     confidence: float
     preprocessing_mode: str
     processing_time_ms: float = 0.0
+    initial_transition_frame: bool = False
     character_count: int = 0
     chinese_character_ratio: float = 0.0
     similarity_to_other_candidates: float = 0.0
@@ -94,6 +95,10 @@ class OcrEvent:
     transition_mix_detected: bool = False
     matched_previous_fragment: str = ""
     remaining_new_fragment: str = ""
+    auxiliary_ffmpeg_runs: int = 0
+    auxiliary_decode_ms: float = 0.0
+    fallback_used: bool = False
+    transition_debounce_skips: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

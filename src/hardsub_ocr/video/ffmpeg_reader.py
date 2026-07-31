@@ -27,6 +27,9 @@ class FFmpegFrameReader:
                 "-vf", f"crop={self.crop.width}:{self.crop.height}:{self.crop.x}:{self.crop.y},fps=1/{self.interval}",
                 "-an", "-sn", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"]
 
+    def timestamp_for_index(self, index: int) -> float:
+        return self.start + index * self.interval
+
     def frames(self) -> Iterator[tuple[int, float, np.ndarray]]:
         command = self.command()
         logging.getLogger("hardsub_ocr").debug("FFmpeg command: %s", subprocess.list2cmdline(command))
@@ -44,7 +47,7 @@ class FFmpegFrameReader:
             if len(data) != size:
                 self.stop()
                 raise RuntimeError(f"FFmpeg raw frame이 불완전합니다: {len(data)}/{size} bytes")
-            yield index, self.start + index * self.interval, np.frombuffer(data, np.uint8).reshape(self.crop.height, self.crop.width, 3)
+            yield index, self.timestamp_for_index(index), np.frombuffer(data, np.uint8).reshape(self.crop.height, self.crop.width, 3)
             index += 1
         code = self.process.wait()
         thread.join(timeout=1)

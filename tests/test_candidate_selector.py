@@ -1,5 +1,5 @@
 from hardsub_ocr.models import OcrCandidate
-from hardsub_ocr.subtitle.candidate_selector import select_candidate
+from hardsub_ocr.subtitle.candidate_selector import resolve_with_single_candidate_fallback, select_candidate
 
 
 def candidate(text: str, confidence: float = .85, timestamp: float = 1.0) -> OcrCandidate:
@@ -37,10 +37,40 @@ def test_transition_mix_is_rejected_by_new_text_consensus():
     assert mixed.transition_mix_detected
 
 
-def test_fast_two_frame_suffix_prefers_common_text():
+def test_two_frame_suffix_is_not_automatically_removed():
     selection = select_candidate([
         candidate("是的，要陪客户，抱啊", .91),
         candidate("是的，要陪客户", .84, 1.2),
     ])
-    assert selection.selected.normalized_text == "是的，要陪客户"
-    assert selection.removed_unstable_suffix == "，抱啊"
+    assert selection.removed_unstable_suffix == ""
+
+
+def test_single_candidate_below_confirmation_threshold_uses_fallback():
+    selection = select_candidate([candidate("短字幕", .74)])
+    selected, fallback = resolve_with_single_candidate_fallback(selection)
+    assert selected.normalized_text == "短字幕"
+    assert fallback is True
+
+
+def test_normal_sentence_endings_are_not_trimmed_with_two_candidates():
+    for ending in ("啊", "呢", "吧"):
+        selection = select_candidate([
+            candidate("你去哪里" + ending, .88),
+            candidate("你去哪里", .86, 1.2),
+        ])
+        assert selection.removed_unstable_suffix == ""
+        assert selection.selected.normalized_text.endswith(ending)
+
+
+def test_point_three_second_subtitle_survives_single_candidate_fallback():
+    from hardsub_ocr.subtitle.segment_builder import SegmentBuilder
+
+    selection = select_candidate([candidate("短暂字幕", .74, 100.0)])
+    selected, fallback = resolve_with_single_candidate_fallback(selection)
+    builder = SegmentBuilder()
+    builder.add(100.0, selected.normalized_text, selected.confidence, 0)
+    segments = builder.finish(100.3)
+    assert fallback is True
+    assert len(segments) == 1
+    assert segments[0].text == "短暂字幕"
+    assert segments[0].end_time - segments[0].start_time >= .3
