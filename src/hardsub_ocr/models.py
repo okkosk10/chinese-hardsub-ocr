@@ -25,6 +25,7 @@ class OcrResult:
     joined_text_before_dedup: str = ""
     joined_text_after_dedup: str = ""
     deduplicated_overlap: list[str] = field(default_factory=list)
+    line_boxes: list[list[float]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -50,6 +51,7 @@ class OcrCandidate:
     deduplicated_overlap: list[str] = field(default_factory=list)
     original_image_path: str = ""
     preprocessed_image_path: str = ""
+    line_boxes: list[list[float]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

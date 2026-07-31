@@ -18,3 +18,4 @@ def test_old_settings_file_uses_new_quality_defaults(tmp_path):
     assert settings.transition_settle_seconds == .15
     assert settings.candidate_consensus_enabled is True
     assert settings.processing_mode == "fast"
+    assert settings.auxiliary_fallback_enabled is False

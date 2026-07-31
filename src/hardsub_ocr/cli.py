@@ -8,8 +8,10 @@ import sys
 from hardsub_ocr.config import Crop, OcrConfig
 from hardsub_ocr.detection.image_preprocessor import MODES
 from hardsub_ocr.pipeline import OcrPipeline
+from hardsub_ocr.subtitle.srt_cleaner import clean_segments, cleaned_srt_path, parse_srt
+from hardsub_ocr.subtitle.srt_writer import write_srt
 from hardsub_ocr.utils.logging_config import configure_logging
-from hardsub_ocr.utils.file_utils import output_paths
+from hardsub_ocr.utils.file_utils import atomic_write_json, output_paths
 from hardsub_ocr.utils.process_priority import set_low_priority
 from hardsub_ocr.utils.timecode import format_timecode, parse_timecode
 from hardsub_ocr.video.video_probe import probe_video, require_ffmpeg
@@ -42,11 +44,47 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--unstable-suffix-max-chars", type=int, default=3)
     parser.add_argument("--empty-confirmation-count", type=int, default=2)
     parser.add_argument("--empty-confirmation-seconds", type=float, default=0.4)
+    parser.add_argument("--auxiliary-fallback", action=argparse.BooleanOptionalAction, default=False,
+                        help="후보 부족 시에만 별도 FFmpeg 보조 디코딩 사용(기본: 끔)")
     return parser
 
 
+def build_clean_srt_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="hardsub-ocr clean-srt",
+                                     description="기존 SRT의 초단기 노이즈와 줄 순서 중복을 정리합니다.")
+    parser.add_argument("--input", type=Path, required=True, help="정리할 원본 SRT")
+    parser.add_argument("--output", type=Path, help="cleaned SRT 경로")
+    parser.add_argument("--report-json", type=Path, help="제거 사유 JSON 경로")
+    return parser
+
+
+def clean_srt_main(argv: list[str]) -> int:
+    args = build_clean_srt_parser().parse_args(argv)
+    try:
+        source = args.input.resolve()
+        output = args.output.resolve() if args.output else cleaned_srt_path(source)
+        report = args.report_json.resolve() if args.report_json else output.with_suffix(".json")
+        segments = parse_srt(source)
+        cleaned, removed = clean_segments(segments)
+        write_srt(output, cleaned)
+        atomic_write_json(report, {
+            "input_srt": str(source), "output_srt": str(output),
+            "input_segment_count": len(segments), "cleaned_segment_count": len(cleaned),
+            "removed_segment_count": len(removed), "removed_segments": removed,
+        })
+        print(output)
+        print(report)
+        return 0
+    except Exception as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "clean-srt":
+        return clean_srt_main(arguments[1:])
+    args = build_parser().parse_args(arguments)
     try:
         require_ffmpeg()
         info = probe_video(args.input)
@@ -68,7 +106,8 @@ def main(argv: list[str] | None = None) -> int:
                            unstable_suffix_max_chars=args.unstable_suffix_max_chars,
                            empty_confirmation_count=args.empty_confirmation_count,
                            empty_confirmation_seconds=args.empty_confirmation_seconds,
-                           processing_mode=args.processing_mode)
+                           processing_mode=args.processing_mode,
+                           auxiliary_fallback_enabled=args.auxiliary_fallback)
         paths = output_paths(config.input_path, config.output_dir)
         configure_logging(paths[2], args.verbose)
         set_low_priority()
@@ -80,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\n" + ("중단된 결과를 저장했습니다." if pipeline.cancel_event.is_set() else "완료했습니다."))
         for path in results[:2]:
             print(path)
+        print(cleaned_srt_path(results[0]))
         return 130 if pipeline.cancel_event.is_set() else 0
     except Exception as exc:
         print(f"오류: {exc}", file=sys.stderr)

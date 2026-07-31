@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 
 from hardsub_ocr.models import OcrResult
+from hardsub_ocr.ocr.line_grouper import group_ocr_boxes
 from hardsub_ocr.subtitle.text_normalizer import merge_ocr_lines, normalize_text
 
 
@@ -21,17 +22,16 @@ class RapidOcrEngine:
     def recognize(self, image: np.ndarray) -> OcrResult:
         started = time.perf_counter()
         raw, _ = self._engine(image)
-        lines: list[tuple[float, float, str, float, Any]] = []
+        items: list[tuple[Any, str, float]] = []
         for item in raw or []:
             if len(item) < 3:
                 continue
             box, text, confidence = item[0], str(item[1]), float(item[2])
-            x = min(float(point[0]) for point in box)
-            y = min(float(point[1]) for point in box)
-            lines.append((y, x, text, confidence, box))
-        lines.sort(key=lambda value: (round(value[0] / 20), value[1]))
-        raw_lines = [value[2].strip() for value in lines if value[2].strip()]
+            items.append((box, text, confidence))
+        grouped = group_ocr_boxes(items)
+        raw_lines = [line["text"] for line in grouped]
+        line_boxes = [line["box"] for line in grouped]
         before, text, overlaps = merge_ocr_lines(raw_lines)
-        confidence = sum(x[3] for x in lines) / len(lines) if lines else 0.0
-        return OcrResult(text, normalize_text(text), confidence, raw, [x[4] for x in lines],
-                         (time.perf_counter() - started) * 1000, raw_lines, before, text, overlaps)
+        confidence = sum(line["confidence"] for line in grouped) / len(grouped) if grouped else 0.0
+        return OcrResult(text, normalize_text(text), confidence, raw, [item[0] for item in items],
+                         (time.perf_counter() - started) * 1000, raw_lines, before, text, overlaps, line_boxes)

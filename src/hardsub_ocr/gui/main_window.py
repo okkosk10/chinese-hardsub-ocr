@@ -18,6 +18,7 @@ from hardsub_ocr.gui.video_preview import VideoPreview
 from hardsub_ocr.utils.file_utils import output_paths
 from hardsub_ocr.utils.logging_config import configure_logging
 from hardsub_ocr.utils.timecode import format_timecode, parse_timecode
+from hardsub_ocr.subtitle.srt_cleaner import cleaned_srt_path
 from hardsub_ocr.video.video_probe import probe_video, require_ffmpeg
 
 
@@ -100,9 +101,11 @@ class MainWindow(QMainWindow):
         self.consensus = QCheckBox(); self.consensus.setChecked(self.settings.candidate_consensus_enabled)
         self.line_dedup = QCheckBox(); self.line_dedup.setChecked(self.settings.line_overlap_dedup_enabled)
         self.suffix_removal = QCheckBox(); self.suffix_removal.setChecked(self.settings.suspicious_suffix_removal_enabled)
+        self.auxiliary_fallback = QCheckBox(); self.auxiliary_fallback.setChecked(self.settings.auxiliary_fallback_enabled)
         advanced_form.addRow("전환 안정화", self.settle); advanced_form.addRow("후보 수집 구간", self.candidate_window)
         advanced_form.addRow("후보 프레임 수", self.candidate_count); advanced_form.addRow("후보 합의", self.consensus)
         advanced_form.addRow("줄 경계 중복 제거", self.line_dedup); advanced_form.addRow("의심 접미 제거", self.suffix_removal)
+        advanced_form.addRow("보조 FFmpeg fallback", self.auxiliary_fallback)
         form.addRow(advanced)
         self.test_button = QPushButton("30초 시험 OCR"); self.test_button.clicked.connect(lambda: self._start_ocr(True))
         self.full_button = QPushButton("전체 구간 OCR"); self.full_button.clicked.connect(lambda: self._start_ocr(False))
@@ -160,7 +163,8 @@ class MainWindow(QMainWindow):
                            candidate_consensus_enabled=self.consensus.isChecked(),
                            line_overlap_dedup_enabled=self.line_dedup.isChecked(),
                            suspicious_suffix_removal_enabled=self.suffix_removal.isChecked(),
-                           processing_mode=self.processing_mode.currentData())
+                           processing_mode=self.processing_mode.currentData(),
+                           auxiliary_fallback_enabled=self.auxiliary_fallback.isChecked())
         config.validate(self.video_info.width, self.video_info.height); return config
 
     def _start_ocr(self, test: bool) -> None:
@@ -175,6 +179,7 @@ class MainWindow(QMainWindow):
         self.settings.candidate_frame_count = self.candidate_count.value()
         self.settings.candidate_consensus_enabled, self.settings.line_overlap_dedup_enabled = self.consensus.isChecked(), self.line_dedup.isChecked()
         self.settings.suspicious_suffix_removal_enabled = self.suffix_removal.isChecked()
+        self.settings.auxiliary_fallback_enabled = self.auxiliary_fallback.isChecked()
         self.settings.processing_mode = self.processing_mode.currentData(); self.settings.save(self.settings_path)
         configure_logging(output_paths(config.input_path, config.output_dir)[2])
         self.thread = QThread(self); self.worker = OcrWorker(config); self.worker.moveToThread(self.thread)
@@ -200,7 +205,7 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self, paths) -> None:
         self._reset_running(); self.progress.setValue(100); self.status.setText("완료 (또는 중단 결과 저장 완료)")
-        self._log("저장: " + ", ".join(str(p) for p in paths[:2]))
+        self._log("저장: " + ", ".join(str(p) for p in (*paths[:2], cleaned_srt_path(paths[0]))))
 
     def _on_failed(self, message: str) -> None:
         self._reset_running(); self.status.setText("실패"); self._log("오류: " + message); QMessageBox.critical(self, "OCR 오류", message)

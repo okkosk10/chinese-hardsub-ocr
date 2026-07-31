@@ -61,6 +61,11 @@ class OcrConfig:
     empty_confirmation_count: int = 2
     empty_confirmation_seconds: float = 0.4
     processing_mode: str = "fast"
+    stream_frame_interval: float = 0.2
+    ring_buffer_seconds: float = 1.0
+    auxiliary_fallback_enabled: bool = False
+    preserve_separated_lines: bool = True
+    line_separation_gap_ratio: float = 0.45
 
     def validate(self, video_width: int | None = None, video_height: int | None = None) -> None:
         if not self.input_path.is_file():
@@ -83,6 +88,10 @@ class OcrConfig:
             raise ValueError("빈 결과 확인 횟수는 1 이상이고 확인 시간은 0 이상이어야 합니다.")
         if self.processing_mode not in {"fast", "precise"}:
             raise ValueError("처리 모드는 fast 또는 precise여야 합니다.")
+        if self.stream_frame_interval <= 0 or self.ring_buffer_seconds < 1.0:
+            raise ValueError("스트림 프레임 간격은 0보다 크고 ring buffer는 최소 1초여야 합니다.")
+        if self.line_separation_gap_ratio < 0:
+            raise ValueError("줄 분리 간격 비율은 0 이상이어야 합니다.")
         if video_width and self.crop.x + self.crop.width > video_width:
             raise ValueError("crop이 영상 가로 범위를 벗어납니다.")
         if video_height and self.crop.y + self.crop.height > video_height:
@@ -106,6 +115,7 @@ class UserSettings:
     line_overlap_dedup_enabled: bool = True
     suspicious_suffix_removal_enabled: bool = True
     processing_mode: str = "fast"
+    auxiliary_fallback_enabled: bool = False
     recent_video: str = ""
     recent_crops: dict[str, str] = field(default_factory=dict)
 
