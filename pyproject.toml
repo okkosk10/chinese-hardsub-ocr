@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chinese-hardsub-ocr"
+version = "0.1.0"
+description = "Windows desktop and CLI tool for Chinese hard-subtitle OCR"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.24,<3",
+  "opencv-python>=4.8",
+  "rapidfuzz>=3.5",
+  "rapidocr-onnxruntime>=1.3.24",
+  "onnxruntime>=1.16",
+  "PySide6>=6.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+hardsub-ocr = "hardsub_ocr.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
