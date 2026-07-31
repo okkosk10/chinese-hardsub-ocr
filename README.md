@@ -13,6 +13,9 @@
 - RapidFuzz 기반 문장 병합, 짧은 문장에 더 엄격한 임계값, 겹치지 않는 SRT
 - GUI 중지 또는 CLI Ctrl+C 시 FFmpeg 종료 후 현재 SRT/JSON을 원자적으로 저장
 - 30초 시험 OCR, 실시간 진행/로그/최근 영상과 crop 기억, 선택적 디버그 이미지
+- 전환 직후 0.15초 안정화 후 전환 구간에만 2~3개 보조 프레임 OCR
+- 여러 OCR 후보의 confidence·합의도·중국어 비율·길이 안정성 기반 선택
+- 두 줄 OCR 경계의 1~6자 중복과 한 후보에만 나타난 1~3자 의심 접미 제거
 
 ## Windows 설치
 
@@ -49,6 +52,8 @@ py -3.11 -m venv .venv
 4. 먼저 `30초 시험 OCR`로 결과를 확인하고, 필요하면 전처리·변화 임계값·유사도 임계값을 조정합니다.
 5. `전체 구간 OCR`을 실행합니다. 중지는 현재까지의 결과를 안전하게 저장합니다.
 
+`빠른 모드`는 전환 구간 후보 2개와 한 가지 전처리를 사용합니다. `정밀 모드`는 전환 구간 후보 3개에 대해 원본 crop과 2배 grayscale을 비교하므로 더 느리지만 전환 프레임 오인식 확인에 유리합니다. 고급 OCR 안정화 설정에서 안정화 시간, 후보 구간·개수, 후보 합의, 줄 중복 제거와 의심 접미 제거를 조정할 수 있습니다.
+
 VLC 등에서 외부 한국어 SRT를 끄거나 화면의 다른 위치로 옮긴 뒤 OCR하세요. 한국어 자막이 crop에 겹치면 함께 인식될 수 있습니다.
 
 ## CLI
@@ -65,6 +70,8 @@ python -m hardsub_ocr.cli `
 
 시간은 `HH:MM:SS`, `HH:MM:SS.mmm`, 초 숫자를 지원합니다. `--test-seconds 30`, `--change-threshold`, `--similarity-threshold`, `--ffmpeg-threads`, `--preprocess-mode`, `--save-debug-images`, `--verbose`도 사용할 수 있습니다.
 
+OCR 안정화 옵션은 `--processing-mode fast|precise`, `--transition-settle-seconds`, `--candidate-window-seconds`, `--candidate-frame-count`, `--candidate-consensus/--no-candidate-consensus`, `--line-overlap-dedup/--no-line-overlap-dedup`, `--suspicious-suffix-removal/--no-suspicious-suffix-removal`입니다. 기존 명령은 옵션을 추가하지 않아도 새 기본값으로 그대로 동작합니다.
+
 ## 결과
 
 입력이 `ipx-193.mp4`이면 출력 폴더에 다음이 생성됩니다.
@@ -74,6 +81,8 @@ python -m hardsub_ocr.cli `
 - `ipx-193.zh-ocr.log`: CLI 실행 로그
 
 JSON은 작업 중 주기적으로 임시 파일에 쓴 뒤 교체하므로 중단 시 손상 위험을 줄입니다. 디버그 옵션은 전환·낮은 confidence·예외 프레임만 `output/debug`에 저장합니다.
+
+각 전환 이벤트에는 원본 OCR 줄, 중복 제거 전후 텍스트, 제거된 경계 문자열, 전체 후보와 점수, 선택·거부 후보, 합의 점수, 선택 이유, 혼합 프레임 판정과 제거한 불안정 접미가 기록됩니다. 디버그 이미지를 켜면 후보별 원본 crop과 전처리 이미지 경로도 JSON에 기록됩니다.
 
 ## 정확도와 자원 조정
 

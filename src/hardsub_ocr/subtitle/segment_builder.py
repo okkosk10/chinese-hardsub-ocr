@@ -8,13 +8,18 @@ from hardsub_ocr.subtitle.text_similarity import is_same_text, similarity
 class SegmentBuilder:
     def __init__(self, similarity_threshold: float = 82, short_threshold: float = 94,
                  min_duration: float = 0.35, max_duration: float = 8.0,
-                 blank_tolerance: int = 1, end_grace: float = 0.15) -> None:
+                 blank_tolerance: int = 1, end_grace: float = 0.15,
+                 empty_confirmation_count: int | None = None,
+                 empty_confirmation_seconds: float = 0.4) -> None:
         self.threshold, self.short_threshold = similarity_threshold, short_threshold
         self.min_duration, self.max_duration = min_duration, max_duration
         self.blank_tolerance, self.end_grace = blank_tolerance, end_grace
+        self.empty_confirmation_count = blank_tolerance + 1 if empty_confirmation_count is None else empty_confirmation_count
+        self.empty_confirmation_seconds = 0.0 if empty_confirmation_count is None else empty_confirmation_seconds
         self.segments: list[SubtitleSegment] = []
         self.current: SubtitleSegment | None = None
         self.blank_count = 0
+        self.blank_started_at: float | None = None
 
     def add(self, timestamp: float, text: str, confidence: float, frame_index: int) -> tuple[str, float]:
         text = normalize_text(text)
@@ -22,11 +27,15 @@ class SegmentBuilder:
         if not text:
             if self.current:
                 self.blank_count += 1
-                if self.blank_count > self.blank_tolerance:
+                if self.blank_started_at is None:
+                    self.blank_started_at = timestamp
+                enough_time = timestamp - self.blank_started_at + 1e-9 >= self.empty_confirmation_seconds
+                if self.blank_count >= self.empty_confirmation_count and enough_time:
                     self._finish(max(self.current.last_seen_timestamp + self.end_grace, self.current.start_time + self.min_duration))
                     return "finish_blank", previous_similarity
             return "blank", previous_similarity
         self.blank_count = 0
+        self.blank_started_at = None
         if self.current is None:
             self._start(timestamp, text, confidence, frame_index)
             return "start", previous_similarity

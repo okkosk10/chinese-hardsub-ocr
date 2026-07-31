@@ -30,6 +30,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--test-seconds", type=float)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--preprocess-mode", choices=MODES, default="gray2x")
+    parser.add_argument("--processing-mode", choices=("fast", "precise"), default="fast")
+    parser.add_argument("--transition-settle-seconds", type=float, default=0.15)
+    parser.add_argument("--candidate-window-seconds", type=float, default=0.6)
+    parser.add_argument("--candidate-frame-count", type=int, choices=range(1, 4), default=3)
+    parser.add_argument("--candidate-consensus", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--line-overlap-dedup", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--suspicious-suffix-removal", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--candidate-consensus-threshold", type=float, default=88.0)
+    parser.add_argument("--line-overlap-max-chars", type=int, default=6)
+    parser.add_argument("--unstable-suffix-max-chars", type=int, default=3)
+    parser.add_argument("--empty-confirmation-count", type=int, default=2)
+    parser.add_argument("--empty-confirmation-seconds", type=float, default=0.4)
     return parser
 
 
@@ -44,7 +56,19 @@ def main(argv: list[str] | None = None) -> int:
             end = min(end, start + args.test_seconds)
         config = OcrConfig(args.input.resolve(), start, end, args.crop, args.output_dir.resolve(), args.interval,
                            args.change_threshold, args.similarity_threshold, ffmpeg_threads=args.ffmpeg_threads,
-                           preprocess_mode=args.preprocess_mode, save_debug_images=args.save_debug_images)
+                           preprocess_mode=args.preprocess_mode, save_debug_images=args.save_debug_images,
+                           transition_settle_seconds=args.transition_settle_seconds,
+                           candidate_window_seconds=args.candidate_window_seconds,
+                           candidate_frame_count=args.candidate_frame_count,
+                           candidate_consensus_enabled=args.candidate_consensus,
+                           line_overlap_dedup_enabled=args.line_overlap_dedup,
+                           suspicious_suffix_removal_enabled=args.suspicious_suffix_removal,
+                           line_overlap_max_chars=args.line_overlap_max_chars,
+                           candidate_consensus_threshold=args.candidate_consensus_threshold,
+                           unstable_suffix_max_chars=args.unstable_suffix_max_chars,
+                           empty_confirmation_count=args.empty_confirmation_count,
+                           empty_confirmation_seconds=args.empty_confirmation_seconds,
+                           processing_mode=args.processing_mode)
         paths = output_paths(config.input_path, config.output_dir)
         configure_logging(paths[2], args.verbose)
         set_low_priority()
@@ -64,4 +88,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

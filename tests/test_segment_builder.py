@@ -27,3 +27,14 @@ def test_rapid_changes_never_overlap():
     b.add(.1, "完全不同", .9, 1)
     segments = b.finish(.3)
     assert segments[0].end_time <= segments[1].start_time
+
+
+def test_empty_requires_count_and_elapsed_confirmation():
+    b = SegmentBuilder(empty_confirmation_count=2, empty_confirmation_seconds=.4)
+    b.add(1.0, "仍在显示", .9, 0)
+    assert b.add(1.5, "", 0, 1)[0] == "blank"
+    assert b.current is not None
+    assert b.add(1.8, "", 0, 2)[0] == "blank"
+    assert b.current is not None
+    assert b.add(1.9, "", 0, 3)[0] == "finish_blank"
+    assert b.current is None

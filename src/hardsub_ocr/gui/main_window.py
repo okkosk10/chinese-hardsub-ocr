@@ -87,9 +87,23 @@ class MainWindow(QMainWindow):
         self.threads = QSpinBox(); self.threads.setRange(1, 8); self.threads.setValue(self.settings.ffmpeg_threads)
         self.mode = QComboBox(); self.mode.addItems(MODES); self.mode.setCurrentText(self.settings.preprocess_mode)
         self.debug = QCheckBox(); self.debug.setChecked(self.settings.save_debug_images)
+        self.processing_mode = QComboBox(); self.processing_mode.addItem("빠른 모드", "fast"); self.processing_mode.addItem("정밀 모드", "precise")
+        index = self.processing_mode.findData(self.settings.processing_mode); self.processing_mode.setCurrentIndex(max(0, index))
         form.addRow("샘플 간격", self.interval); form.addRow("변화 임계값", self.change)
         form.addRow("유사도 임계값", self.similarity); form.addRow("FFmpeg 스레드", self.threads)
-        form.addRow("전처리", self.mode); form.addRow("디버그 이미지", self.debug)
+        form.addRow("전처리", self.mode); form.addRow("처리 모드", self.processing_mode); form.addRow("디버그 이미지", self.debug)
+        advanced = QGroupBox("고급 OCR 안정화 설정"); advanced.setCheckable(True); advanced.setChecked(False)
+        advanced_form = QFormLayout(advanced)
+        self.settle = QDoubleSpinBox(); self.settle.setRange(0, 2); self.settle.setSingleStep(.05); self.settle.setValue(self.settings.transition_settle_seconds); self.settle.setSuffix(" 초")
+        self.candidate_window = QDoubleSpinBox(); self.candidate_window.setRange(.1, 3); self.candidate_window.setSingleStep(.1); self.candidate_window.setValue(self.settings.candidate_window_seconds); self.candidate_window.setSuffix(" 초")
+        self.candidate_count = QSpinBox(); self.candidate_count.setRange(1, 3); self.candidate_count.setValue(self.settings.candidate_frame_count)
+        self.consensus = QCheckBox(); self.consensus.setChecked(self.settings.candidate_consensus_enabled)
+        self.line_dedup = QCheckBox(); self.line_dedup.setChecked(self.settings.line_overlap_dedup_enabled)
+        self.suffix_removal = QCheckBox(); self.suffix_removal.setChecked(self.settings.suspicious_suffix_removal_enabled)
+        advanced_form.addRow("전환 안정화", self.settle); advanced_form.addRow("후보 수집 구간", self.candidate_window)
+        advanced_form.addRow("후보 프레임 수", self.candidate_count); advanced_form.addRow("후보 합의", self.consensus)
+        advanced_form.addRow("줄 경계 중복 제거", self.line_dedup); advanced_form.addRow("의심 접미 제거", self.suffix_removal)
+        form.addRow(advanced)
         self.test_button = QPushButton("30초 시험 OCR"); self.test_button.clicked.connect(lambda: self._start_ocr(True))
         self.full_button = QPushButton("전체 구간 OCR"); self.full_button.clicked.connect(lambda: self._start_ocr(False))
         self.stop_button = QPushButton("중지"); self.stop_button.setEnabled(False); self.stop_button.clicked.connect(self._cancel)
@@ -139,7 +153,14 @@ class MainWindow(QMainWindow):
         config = OcrConfig(self.video_path, start, end, Crop.parse(self.crop_edit.text()), Path(self.output_edit.text()),
                            self.interval.value(), self.change.value(), self.similarity.value(),
                            ffmpeg_threads=self.threads.value(), preprocess_mode=self.mode.currentText(),
-                           save_debug_images=self.debug.isChecked())
+                           save_debug_images=self.debug.isChecked(),
+                           transition_settle_seconds=self.settle.value(),
+                           candidate_window_seconds=self.candidate_window.value(),
+                           candidate_frame_count=self.candidate_count.value(),
+                           candidate_consensus_enabled=self.consensus.isChecked(),
+                           line_overlap_dedup_enabled=self.line_dedup.isChecked(),
+                           suspicious_suffix_removal_enabled=self.suffix_removal.isChecked(),
+                           processing_mode=self.processing_mode.currentData())
         config.validate(self.video_info.width, self.video_info.height); return config
 
     def _start_ocr(self, test: bool) -> None:
@@ -149,7 +170,12 @@ class MainWindow(QMainWindow):
         self.settings.output_dir, self.settings.interval = self.output_edit.text(), self.interval.value()
         self.settings.ffmpeg_threads, self.settings.change_threshold = self.threads.value(), self.change.value()
         self.settings.similarity_threshold, self.settings.preprocess_mode = self.similarity.value(), self.mode.currentText()
-        self.settings.save_debug_images = self.debug.isChecked(); self.settings.save(self.settings_path)
+        self.settings.save_debug_images = self.debug.isChecked()
+        self.settings.transition_settle_seconds, self.settings.candidate_window_seconds = self.settle.value(), self.candidate_window.value()
+        self.settings.candidate_frame_count = self.candidate_count.value()
+        self.settings.candidate_consensus_enabled, self.settings.line_overlap_dedup_enabled = self.consensus.isChecked(), self.line_dedup.isChecked()
+        self.settings.suspicious_suffix_removal_enabled = self.suffix_removal.isChecked()
+        self.settings.processing_mode = self.processing_mode.currentData(); self.settings.save(self.settings_path)
         configure_logging(output_paths(config.input_path, config.output_dir)[2])
         self.thread = QThread(self); self.worker = OcrWorker(config); self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run); self.worker.progress.connect(self._on_progress)

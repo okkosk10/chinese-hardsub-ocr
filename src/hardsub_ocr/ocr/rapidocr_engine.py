@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 from hardsub_ocr.models import OcrResult
-from hardsub_ocr.subtitle.text_normalizer import normalize_text
+from hardsub_ocr.subtitle.text_normalizer import merge_ocr_lines, normalize_text
 
 
 class RapidOcrEngine:
@@ -30,8 +30,8 @@ class RapidOcrEngine:
             y = min(float(point[1]) for point in box)
             lines.append((y, x, text, confidence, box))
         lines.sort(key=lambda value: (round(value[0] / 20), value[1]))
-        text = "\n".join(value[2].strip() for value in lines if value[2].strip())
+        raw_lines = [value[2].strip() for value in lines if value[2].strip()]
+        before, text, overlaps = merge_ocr_lines(raw_lines)
         confidence = sum(x[3] for x in lines) / len(lines) if lines else 0.0
         return OcrResult(text, normalize_text(text), confidence, raw, [x[4] for x in lines],
-                         (time.perf_counter() - started) * 1000)
-
+                         (time.perf_counter() - started) * 1000, raw_lines, before, text, overlaps)
